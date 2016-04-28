@@ -1,0 +1,14 @@
+some modules
+
+to establish a database connection:
+```
+from MySQLConnect import MySQLConnect
+from settings_db import DATABASE_SETTINGS
+DATABASE_SETTINGS['db_name'] = 'mas'  # to use 'mas' database
+db = MySQLConnect(**settings)
+
+# tables are in db.tables
+tbl = db.tables['tablename']
+sq = tbl.select()
+df = db.read_sql(sq)  # wrapper for pandas read_sql function
+```
