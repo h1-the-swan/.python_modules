@@ -4,7 +4,8 @@ to establish a database connection:
 ```
 from MySQLConnect import MySQLConnect
 from settings_db import DATABASE_SETTINGS
-DATABASE_SETTINGS['db_name'] = 'mas'  # to use 'mas' database
+settings = DATABASE_SETTINGS['default']
+settings['db_name'] = 'mas'  # to use 'mas' database
 db = MySQLConnect(**settings)
 
 # tables are in db.tables
