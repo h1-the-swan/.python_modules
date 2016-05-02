@@ -45,6 +45,16 @@ class TestCase(unittest.TestCase):
             self.assertTrue(isinstance(result, dict))
             self.assertEqual(len(result), 2)
 
+    def test_get_paperids_from_authorid(self):
+        test_aids = [211222391, '211222391', [211222391], pd.Series(211222391)]
+        for aid in test_aids:
+            result = self.db.get_paperids_from_authorid(aid)
+            self.assertEqual(type(result), pd.Series)
+            self.assertEqual(len(result), 26)
+            result = self.db.get_paperids_from_authorid(aid, return_df=True)
+            self.assertEqual(type(result), pd.DataFrame)
+            self.assertEqual(len(result), 26)
+
 if __name__ == "__main__":
     unittest.main()
 

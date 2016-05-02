@@ -32,6 +32,9 @@ class DBConnectMAG(MySQLConnect):
         self.tblname_fields = 'FieldsOfStudy'
         self.colname_fosname = 'Field_of_study_name'
 
+        self.tblname_paper_authors = 'PaperAuthorAffiliations'
+        self.colname_authorid = 'Author_ID'
+
     def _get_table(self, t):
         """If passed a string, get the table object
 
@@ -136,7 +139,7 @@ class DBConnectMAG(MySQLConnect):
         :table: table object or name of table mapping papers to FOS
         :col_paperid: column (or name of column) for paper ID in the FOS table
         :col_fos: column (or name of column) for Field of Study ID in the FOS table
-        :returns: TODO
+        :returns: list of FOS IDs (strings)
 
         """
         if table is None:
@@ -153,7 +156,7 @@ class DBConnectMAG(MySQLConnect):
 
         # get a list of FOS IDs
         sq = tbl.select().with_only_columns([col_fos])
-        sq = sq.where(col_paperid==paperid)
+        sq = sq.where(col_paperid.in_(paperid))
         r = self.engine.execute(sq).fetchall()
         return [str(row[0]) for row in r]
 
@@ -171,7 +174,7 @@ class DBConnectMAG(MySQLConnect):
         :col_toplevelid: column (or name of column) in the toplevel table for top level FOS
         :weighted: if true, will use the value of `col_weight` column in counting FOS. Default True
         :col_weight: column (or name of column) in the toplevel table with weights (e.g. 'Confidence')
-        :returns: counter with keys (toplevel) Field of Study ID and values weights
+        :returns: counter with keys: (toplevel) Field of Study ID and values: weights
 
         """
         if table is None:
@@ -204,9 +207,9 @@ class DBConnectMAG(MySQLConnect):
                 row = r.fetchone()
                 matched.append(str(row[col_fosid]))
                 if weighted:
-                    fos_count[row[col_toplevelid]] += float(row[col_weight])
+                    fos_count[str(row[col_toplevelid])] += float(row[col_weight])
                 else:
-                    fos_count[row[col_toplevelid]] += 1
+                    fos_count[str(row[col_toplevelid])] += 1
         # assume any leftovers are top level and should be added back in
         for fosid in fosids:
             if fosid not in matched:
@@ -257,9 +260,47 @@ class DBConnectMAG(MySQLConnect):
         """
         fosids = self.query_field_of_study_for_paperid(paperid)
         toplevel_counts = self.query_toplevel_fields_for_field_ids(fosids)
+        if not toplevel_counts:
+            return None
         top_id = toplevel_counts.most_common()[0][0]
         top_name = self.query_field_of_study_name(top_id)
         return {
                 'Field_of_study_ID': top_id,
                 'Field_of_study_name': top_name
                 }
+    
+    def get_paperids_from_authorid(self, authorids,
+                            table=None,
+                            col_authorid=None,
+                            col_paperid=None,
+                            return_df=False):
+        """Return the paper IDs associated with an author ID or list
+
+        :authorids: author ID or list
+        :table: table object or name of table mapping Author IDs to Paper IDs
+        :col_authorid: column (or name of column) in the table for Author ID
+        :col_paperid: column (or name of column) in the table for Paper ID
+        :return_df: return a dataframe rather than a series (default False)
+        :returns: either a Series of paper IDs or the full DataFrame of the table
+
+        """
+        if table is None:
+            table = self.tblname_paper_authors
+        if col_authorid is None:
+            col_authorid = self.colname_authorid
+        if col_paperid is None:
+            col_paperid = self.colname_paperid
+
+        tbl = self._get_table(table)
+        col_authorid = self._get_col(col_authorid, tbl)
+        col_paperid = self._get_col(col_paperid, tbl)
+
+        authorids = parse_id(authorids)
+
+        sq = tbl.select(col_authorid.in_(authorids))
+        result = self.read_sql(sq)
+        if return_df:
+            return result
+        if result.empty:
+            return pd.Series()
+        return result.ix[:, col_paperid.name]
