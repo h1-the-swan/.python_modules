@@ -16,6 +16,7 @@ class DBConnectMAG(MySQLConnect):
         self.tblname_nodes = 'Papers'
         self.colname_venue = ['Journal_ID_mapped_to_venue_name', 'Conference_series_ID_mapped_to_venue_name']
         self.colname_paperid = 'Paper_ID'
+        self.colname_year = 'Paper_publish_year'
         
         self.tblname_links = 'PaperReferences'
         self.colname_citing = 'Paper_ID'
@@ -227,7 +228,7 @@ class DBConnectMAG(MySQLConnect):
         :table: table object or name of table with FOS IDs and names
         :col_fosid: column (or name of column) in the table for FOS
         :col_fosname: column (or name of column) in the table for FOS name
-        :returns: FOS name or names as string or dictionary with  keys FOS ID and values FOS name
+        :returns: FOS name or names as string or dictionary with keys FOS ID and values FOS name
 
         """
         if table is None:
@@ -251,6 +252,38 @@ class DBConnectMAG(MySQLConnect):
                 return r[0][col_fosname]
         else:
             return {row[col_fosid]: row[col_fosname] for row in r}
+
+    def query_nodes(self, paperids,
+                        table=None,
+                        col_paperid=None,
+                        return_type='dataframe'):
+        """Given a paper ID or list, return results of querying the nodes table (title, publication year, etc.)
+
+        :paperids: Paper ID or list
+        :table: table object or name of table for nodes (papers)
+        :col_paperid: column (or name of column) in the table for Paper ID
+        :return_type: {'dataframe', 'dict'} if 'dataframe' (default) return a
+        dataframe. if 'dict' return dictionary: {index -> {column -> value}}
+        :returns: FOS name or names as string or dictionary with keys FOS ID and values FOS name
+
+        """
+        if table is None:
+            table=self.tblname_nodes
+        if col_paperid is None:
+            col_paperid = self.colname_paperid
+
+        tbl = self._get_table(table)
+        col_paperid = self._get_col(col_paperid, tbl)
+
+        paperids = parse_id(paperids)
+
+        sq = tbl.select(col_paperid.in_(paperids))
+        df = self.read_sql(sq)
+        df = df.set_index(col_paperid.name, drop=False)
+        if return_type.lower().startswith('dict'):
+            return df.to_dict(orient='index')
+        else:
+            return df
 
     def get_single_field_for_paper(self, paperid):
         """Given a paper id, return just one field of study (FOS)
