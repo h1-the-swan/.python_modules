@@ -1,6 +1,10 @@
 from MySQLConnect import MySQLConnect
 from citation_db_funcs import parse_id
 from collections import Counter
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+import string
+import pandas as pd
 
 class DBConnectMAG(MySQLConnect):
     """Extends the MySQLConnect object with MAG (Microsoft Academic Graph) specific things
@@ -17,6 +21,7 @@ class DBConnectMAG(MySQLConnect):
         self.colname_venue = ['Journal_ID_mapped_to_venue_name', 'Conference_series_ID_mapped_to_venue_name']
         self.colname_paperid = 'Paper_ID'
         self.colname_year = 'Paper_publish_year'
+        self.colname_title = 'Original_paper_title'
         
         self.tblname_links = 'PaperReferences'
         self.colname_citing = 'Paper_ID'
@@ -218,6 +223,7 @@ class DBConnectMAG(MySQLConnect):
         return fos_count
 
     def query_field_of_study_name(self, fosid,
+                        squeeze=True,
                         table=None,
                         col_fosid=None,
                         col_fosname=None):
@@ -225,6 +231,7 @@ class DBConnectMAG(MySQLConnect):
         If a single fosid is given, return a string. If multiple fosids are given, return a dictionary
 
         :fosid: Field of Study ID or list
+        :squeeze: if there is only one FOS ID, return just the name instead of a dictionary
         :table: table object or name of table with FOS IDs and names
         :col_fosid: column (or name of column) in the table for FOS
         :col_fosname: column (or name of column) in the table for FOS name
@@ -247,7 +254,7 @@ class DBConnectMAG(MySQLConnect):
         sq = tbl.select(col_fosid.in_(fosid))
         sq = sq.with_only_columns([col_fosid, col_fosname])
         r = self.engine.execute(sq).fetchall()
-        if len(fosid)==1:
+        if len(fosid)==1 and squeeze is True:
             if len(r)==1:
                 return r[0][col_fosname]
         else:
@@ -264,7 +271,7 @@ class DBConnectMAG(MySQLConnect):
         :col_paperid: column (or name of column) in the table for Paper ID
         :return_type: {'dataframe', 'dict'} if 'dataframe' (default) return a
         dataframe. if 'dict' return dictionary: {index -> {column -> value}}
-        :returns: FOS name or names as string or dictionary with keys FOS ID and values FOS name
+        :returns: nodes dataframe or dictionary
 
         """
         if table is None:
@@ -302,6 +309,38 @@ class DBConnectMAG(MySQLConnect):
                 'Field_of_study_name': top_name
                 }
     
+    def get_EF(self, paperid):
+        """Given a paper id, return the Eigenfactor score
+
+        :paperid: TODO
+        :returns: TODO
+
+        """
+        tbl = self._get_table('rank')
+        col_paperid = self._get_col(self.colname_paperid, tbl)
+        col_EF = self._get_col('EF', tbl)
+        paperid = parse_id(paperid)
+        sq = tbl.select(col_paperid.in_(paperid))
+        sq = sq.with_only_columns([col_EF])
+        return self.engine.execute(sq).scalar()
+
+    def get_author_id_list(self, paperid):
+        """Given a paper id, return a list of author IDs
+
+        :paperid: TODO
+        :returns: TODO
+
+        """
+        tbl = self._get_table(self.tblname_paper_authors)
+        col_paperid = self._get_col(self.colname_paperid, tbl)
+        col_authorid = self._get_col(self.colname_authorid, tbl)
+        paperid = parse_id(paperid)
+        sq = tbl.select(col_paperid.in_(paperid))
+        sq = sq.with_only_columns([col_authorid])
+        r = self.engine.execute(sq)
+        return [x[0] for x in r.fetchall()]
+
+    
     def get_paperids_from_authorid(self, authorids,
                             table=None,
                             col_authorid=None,
@@ -337,3 +376,197 @@ class DBConnectMAG(MySQLConnect):
         if result.empty:
             return pd.Series()
         return result.ix[:, col_paperid.name]
+
+    def get_match_against_clause(self, column_name, match_text, only_where_clause=False):
+        """Return sql clauses for MATCH {} AGAINST ({} IN NATURAL LANGUAGE MODE)
+        Full-text queries (on fields that have full-text index) are not well-supported in SQLAlchemy
+        This gets the text to inject into the where clause, and the select clause (which gives the score)
+        See MySQL docs for more info
+
+        Make sure to limit queries using this, or add additional WHERE, or else it will probably return too much
+
+        :column_name: (str) name of the column
+        :match_text: full-text search string :only_where_clause: only return the where clause, and not the select clause which gives a score
+        :returns: where_clause, select_clause (sqlalchemy TextClause objects)
+
+        """
+        where_clause = u"MATCH ({}) AGAINST ('{}' IN NATURAL LANGUAGE MODE)".format(column_name, match_text)
+        select_clause = where_clause + u" AS SCORE"
+        where_clause = text(where_clause)
+        select_clause = text(select_clause)
+        if only_where_clause:
+            return where_clause
+        return where_clause, select_clause
+
+    def normalize_title(self, title):
+        """Normalize a paper title
+        Make lowercase, and remove punctuation
+
+        :title: (string) paper title
+        :returns: (string) normalized paper title
+
+        """
+        title_norm = title.strip().lower()
+        if isinstance(title_norm, unicode):
+            table = {ord(char): None for char in string.punctuation}
+            title_norm = title_norm.translate(table)
+        else:
+            table = string.maketrans("", "")
+            title_norm = title_norm.translate(table, string.punctuation)
+        return title_norm
+
+    def query_title_with_first_characters(self, title, 
+                                table=None, 
+                                col_title=None, 
+                                nchars=50):
+        """Query the database for a paper title
+
+        :title: (string) paper title
+        :table: table object or name of table for nodes (papers)
+        :col_title: TODO
+        :nchars: number of characters
+        :returns: TODO
+
+        """
+        if table is None:
+            table=self.tblname_nodes
+        if col_title is None:
+            col_title = 'Normalized_paper_title'
+
+        tbl = self._get_table(table)
+        col_title = self._get_col(col_title, tbl)
+
+        search_str = u"{}%".format(title[:nchars])
+        sq = tbl.select(col_title.like(search_str))
+        result = self.read_sql(sq)
+        return result
+
+    def match_first_characters(self, title, table=None, col_title=None, normalize=True, too_many_threshold=10):
+        if table is None:
+            table=self.tblname_nodes
+        if col_title is None:
+            col_title = 'Normalized_paper_title'
+
+        tbl = self._get_table(table)
+        col_title = self._get_col(col_title, tbl)
+
+        if normalize:
+            title = self.normalize_title(title)
+
+        nchars = 20
+        while nchars < 50:
+            result = self.query_title_with_first_characters(title, table, col_title, nchars=nchars)
+            if len(result) <= too_many_threshold:
+                break
+            nchars = nchars + 10
+        # if still too many results, skip
+        if len(result) > too_many_threshold:
+            return pd.DataFrame()
+        # if no results, skip
+        if result.empty:
+            return result
+        else:
+            # print("match with first character query")
+            return result
+
+    def fuzzy_match(self, paper_title, compare_titles):
+        import difflib
+        seq = difflib.SequenceMatcher()
+        ratios = []
+        for compare_title in compare_titles:
+            seq.set_seqs(paper_title.lower(), compare_title.lower())
+            ratios.append(seq.ratio())
+        return ratios
+
+    def match_paper_title(self, title, 
+                        encoding='utf8',
+                        table=None, 
+                        col_exactmatch=None,
+                        col_fulltextmatch=None, 
+                        col_paperid=None, 
+                        fuzzy_match_threshold=.85,
+                        sphinx_search=True):
+        """Attempt to match a paper title with an entry in the database
+        First, try an exact match with the first characters of the title.
+        Then, try a match against the full text index (this can take a lot longer).
+        At each step, use fuzzy matching and make sure any matches are above fuzzy_match_threshold.
+
+        :title: (string) The paper title
+        :fuzzy_match_threshold: TODO
+        :returns: TODO
+
+        """
+        if table is None:
+            table=self.tblname_nodes
+        if col_exactmatch is None:
+            col_exactmatch = 'Normalized_paper_title'
+        if col_fulltextmatch is None:
+            col_fulltextmatch = self.colname_title
+        if col_paperid is None:
+            col_paperid = self.colname_paperid
+
+        tbl = self._get_table(table)
+        col_exactmatch = self._get_col(col_exactmatch, tbl)
+        col_fulltextmatch = self._get_col(col_fulltextmatch, tbl)
+        col_paperid = self._get_col(col_paperid, tbl)
+
+        if not isinstance(title, unicode):
+            title = title.decode(encoding)
+
+        title_norm = self.normalize_title(title)
+
+        result = self.match_first_characters(title_norm, tbl, col_exactmatch, normalize=False)
+        if not result.empty:
+            ratios = self.fuzzy_match(title, result[col_fulltextmatch.name].tolist())
+            result['ratio'] = ratios
+            result = result[result['ratio']>=fuzzy_match_threshold]
+            if result.empty:
+                return None
+            else:
+                result = result.sort_values('ratio')
+                # return the paper ID
+                return result.iloc[0][col_paperid.name]
+
+        # Sphinx search is fast. Try it:
+        # TODO refactor this
+        if sphinx_search:
+            import MySQLdb
+            # from sqlalchemy import create_engine
+            # import pandas as pd
+            sphinx_conf = {
+                    'host': "127.0.0.1",
+                    'port': 9306,
+                    'user': "",
+                    'passwd': "",
+                    # 'charset': "utf8",
+                    'db': ""
+                    }
+            # conn_str = "mysql://{user}:{password}@{host}:{port}/{db_name}?charset={charset}".format(**sphinx_conf)
+            # print(conn_str)
+            # sphinx_engine = create_engine(conn_str)
+            sphinx_db = MySQLdb.connect(**sphinx_conf)
+            terms = title_norm.split()
+            terms = ' | '.join([x for x in terms if len(x) > 3])
+            sq = "SELECT * FROM sphinx_paper_title_index WHERE MATCH('{}') LIMIT 10".format(terms)
+            # r = sphinx_engine.execute(sq)
+            # r = pd.read_sql(sq, sphinx_engine)
+            # print r
+            cursor = sphinx_db.cursor()
+            cursor.execute(sq)
+
+            # get paperids
+            paperids = [int(x[0]) for x in cursor.fetchall()]
+            sphinx_db.close()
+            sphinx_matches = self.query_nodes(paperids)
+            ratios = self.fuzzy_match(title, sphinx_matches[col_fulltextmatch.name].tolist())
+            sphinx_matches['ratio'] = ratios
+            sphinx_matches = sphinx_matches[sphinx_matches['ratio']>=fuzzy_match_threshold]
+            if sphinx_matches.empty:
+                return None
+            else:
+                sphinx_matches = sphinx_matches.sort_values('ratio')
+                # return the paper ID
+                return sphinx_matches.iloc[0][col_paperid.name]
+
+
+

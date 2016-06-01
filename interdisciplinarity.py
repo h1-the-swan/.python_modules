@@ -1,4 +1,4 @@
-import sys, os, time, string
+import sys, os, time, string, json
 from datetime import datetime
 from collections import Counter
 import pandas as pd
@@ -210,59 +210,87 @@ class Interdisc(object):
             venue_counts[id_with_prefix] += thiscount
         return venue_counts
 
-    def get_integrator_score(self, paperids):
+    def get_integrator_score(self, paperids, return_n=False):
         """Get the integrator interdisciplinarity score from a list of paper IDs
 
         :paperids: paperid or list of paperids
-        :returns: integrator score (float)
+        :return_n: if True, include the number of outcitations considered in the calculation
+        :returns: integrator score (float) or (score, num_out_citations) tuple
 
         """
         Cout = self._db.query_for_citations(paperids, direction='out').astype(str)
         counts_Cout = self.get_venue_counts(Cout)
         if counts_Cout is None:
-            return 0
-        return self.integrator(counts_Cout)
+            score = 0
+        else: 
+            score = self.integrator(counts_Cout)
+        if return_n:
+            return (score, len(Cout))
+        return score
 
-    def get_broadcast_score(self, paperids):
+    def get_broadcast_score(self, paperids, return_n=False):
         """Get the integrator interdisciplinarity score from a list of paper IDs
 
         :paperids: paperid or list of paperids
-        :returns: integrator score (float)
+        :return_n: if True, include the number of in-citations considered in the calculation
+        :returns: broadcast score (float) or (score, num_in_citations) tuple
 
         """
         Cin = self._db.query_for_citations(paperids, direction='in').astype(str)
         counts_Cin = self.get_venue_counts(Cin)
         if counts_Cin is None:
-            return 0
-        return self.broadcast(counts_Cin)
+            score = 0
+        else:
+            score = self.broadcast(counts_Cin)
+        if return_n:
+            return (score, len(Cin))
+        return score
 
-    def get_scores_from_paperids(self, paperids):
+    def get_scores_from_paperids(self, paperids, return_n=False):
         """Get the integrator and broadcast interdisciplinarity scores from a
         list of paper IDs
 
         :paperids: paperid or list of paperids
+        :return_n: if True, will return two tuples (score, number of in/out citations)
         :returns: integrator_score, broadcast_score (floats)
 
         """
-        integrator_score = self.get_integrator_score(paperids)
-        broadcast_score = self.get_broadcast_score(paperids)
+        integrator_score = self.get_integrator_score(paperids, return_n=return_n)
+        broadcast_score = self.get_broadcast_score(paperids, return_n=return_n)
         return integrator_score, broadcast_score
 
-    def get_scores_from_authorids(self, authorids):
+    def get_scores_from_authorids(self, authorids, return_n=False):
         """Get the integrator and broadcast interdisciplinarity scores from a
         list of author IDs (or single author ID)
 
         :authorids: authorid or list of authorids
+        :return_n: if True, will return two tuples (score, number of in/out citations)
         :returns: integrator_score, broadcast_score (floats)
 
         """
         pids = self._db.get_paperids_from_authorid(authorids)
-        integrator_score, broadcast_score = self.get_scores_from_paperids(pids)
+        integrator_score, broadcast_score = self.get_scores_from_paperids(pids, return_n=return_n)
         return integrator_score, broadcast_score
 
+def load_db():
+    from DBConnectMAG import DBConnectMAG
+    from settings_db import DATABASE_SETTINGS
+    return DBConnectMAG(**DATABASE_SETTINGS['default'])
 
-def main():
-    pass
+def main(args):
+    if args.paperid:
+        try:
+            args.paperid = json.loads(args.paperid)
+        except ValueError:
+            pass
+    db = load_db()
+    ##interdisc = Interdisc(db, TODO)
+    if args.authorid:
+        try:
+            args.authorid = json.loads(args.authorid)
+        except ValueError:
+            pass
+    ### TODO
 
 if __name__ == "__main__":
     total_start = time.time()
@@ -270,12 +298,16 @@ if __name__ == "__main__":
     logger.info( '{:%Y-%m-%d %H:%M:%S}'.format(datetime.now()) )
     import argparse
     parser = argparse.ArgumentParser(description="get interdisciplinarity scores")
+    parser.add_argument("-p", "--paperid", help='paper ID or (json decodeable) list, e.g. "[2345, 3456, 35677]"')
+    parser.add_argument("-a", "--authorid", help='author ID or (json decodeable) list, e.g. "[2345, 3456, 35677]"')
     parser.add_argument("--debug", action='store_true', help="output debugging info")
     global args
     args = parser.parse_args()
     if args.debug:
         logger.setLevel(logging.DEBUG)
         logger.debug('debug mode is on')
-    main()
+    if args.paperid and args.authorid:
+        logger.error("choose either authorid *or* paperid")
+    main(args)
     total_end = time.time()
     logger.info('all finished. total time: {:.2f} seconds'.format(total_end-total_start))
