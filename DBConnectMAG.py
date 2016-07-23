@@ -308,6 +308,28 @@ class DBConnectMAG(MySQLConnect):
                 'Field_of_study_ID': top_id,
                 'Field_of_study_name': top_name
                 }
+
+    def get_toplevel_cluster(self, paperid):
+        """Given a paper id, return the toplevel infomap cluster
+
+        :paperid: TODO
+        :returns: TODO
+
+        """
+        tbl = self._get_table('tree')
+        col_paperid = self._get_col(self.colname_paperid, tbl)
+        col_cluster = self._get_col('cl', tbl)
+        paperid = parse_id(paperid)
+        sq = tbl.select(col_paperid.in_(paperid))
+        sq = sq.with_only_columns([col_cluster])
+        r = self.engine.execute(sq).fetchone()
+        if r:
+            cl = r[0]
+            toplevel_cl = cl.split(':')[0]
+            return toplevel_cl
+        else:
+            return 0
+
     
     def get_EF(self, paperid):
         """Given a paper id, return the Eigenfactor score
